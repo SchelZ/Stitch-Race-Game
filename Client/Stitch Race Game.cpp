@@ -16,65 +16,76 @@
 
 #include "config.h"
 
-const float move_speed = 10.0f;
+const float base_speed = 5.0f;
+const float boost_speed = 20.0f;
+const float turn_speed = 90.0f;
+const float drift_factor = 0.75f;
+
 bool key_map[256] = { false };
 WindowFramework* window;
 
+#ifdef _SERVER
+QueuedConnectionManager* conn_mgr = new QueuedConnectionManager();
+ConnectionWriter* conn_writer = new ConnectionWriter(conn_mgr, 0);
+PT(Connection)  connection;
+#endif
 PT(ClockObject) globalClock = ClockObject::get_global_clock();
 
-//PT(QueuedConnectionManager)  conn_mgr;
-//PT(ConnectionWriter)		 conn_writer;
-//PT(Connection)               connection;
 
 void send_position(const LVector3& pos) {
 	Datagram dg;
 	dg.add_float32(pos.get_x());
 	dg.add_float32(pos.get_y());
 	dg.add_float32(pos.get_z());
-	// false = do not require “reliable” ack
-	//conn_writer->send(dg, connection, false);
+	// false = do not require â€œreliableâ€ ack
+	//conn_writer->send(dg, connection, true);
 }
 
 void setCursorHidden(WindowFramework* window, const bool hide) {
 	WindowProperties props;
 	props.set_cursor_hidden(hide);
-	if (hide)
-		props.set_mouse_mode(WindowProperties::M_relative);
-	else 
-		props.set_mouse_mode(WindowProperties::M_absolute);
+	props.set_mouse_mode(hide ? WindowProperties::M_relative : WindowProperties::M_absolute);
 	window->get_graphics_window()->request_properties(props);
 }
 
+void on_key_down(const Event* ev, void* data) { key_map[(intptr_t)data] = true; }
+void on_key_up(const Event* ev, void* data) { key_map[(intptr_t)data] = false; }
+
 AsyncTask::DoneStatus update_task(GenericAsyncTask* task, void* data) {
 	NodePath cam = window->get_camera_group();
-	float dt = globalClock->get_dt();
+	const float dt = globalClock->get_dt();
 
-	LVector3 move(0, 0, 0);
-	if (key_map['w']) move += LVector3(0, 1, 0);
-	if (key_map['s']) move += LVector3(0, -1, 0);
-	if (key_map['a']) move += LVector3(-1, 0, 0);
-	if (key_map['d']) move += LVector3(1, 0, 0);
-
-	if (move.length_squared() > 0.0f) {
-		move.normalize();
-		cam.set_pos(cam, move * move_speed * dt); // move relative to camera direction
+	if (key_map['a']) {
+		cam.set_h(cam, turn_speed * dt);
+	}
+	if (key_map['d']) {
+		cam.set_h(cam, -turn_speed * dt);
 	}
 
-	send_position(cam.get_pos());
+	const float speed = key_map['w'] ? boost_speed : base_speed;
+	const LVector3 forward = cam.get_quat(window->get_render()).get_forward();
+	LVector3 disp = forward * speed * dt;
+
+	if (key_map[' '] && (key_map['a'] || key_map['d'])) {
+		const float sign = key_map['d'] ? +1.0f : -1.0f;
+		const LVector3 right = cam.get_quat(window->get_render()).get_right();
+		const float drift_speed = base_speed * drift_factor;
+		disp += right * drift_speed * dt * sign;
+	}
+
+	const LPoint3 old_pos = cam.get_pos(window->get_render());
+	cam.set_pos(window->get_render(), old_pos + disp);
+
+	//send_position(cam.get_pos());
 	return AsyncTask::DS_cont;
 }
 
-void on_key_down(const Event* ev, void* data) { key_map[(intptr_t)data] = true; }
 
-void on_key_up(const Event* ev, void* data) { key_map[(intptr_t)data] = false; }
 
 int main(int argc, char* argv[]) {
 	load_prc_file_data("", game_prc_settings);
 
-	QueuedConnectionManager* conn_mgr = new QueuedConnectionManager();
-	ConnectionWriter* conn_writer = new ConnectionWriter(conn_mgr, 0);
-	PT(Connection)           connection;
-
+#ifdef _SERVER
 	NetAddress server_addr;
 	if (!server_addr.set_host("127.0.0.1", 5000)) {
 		std::cerr << "Invalid address\n"; 
@@ -86,7 +97,7 @@ int main(int argc, char* argv[]) {
 		std::cerr << "Failed to connect to server";
 		return EXIT_FAILURE;
 	}
-
+#endif
 
 	PandaFramework framework;
 	framework.open_framework(argc, argv);
@@ -127,15 +138,18 @@ int main(int argc, char* argv[]) {
 	framework.define_key("d", "move right", on_key_down, (void*)'d');
 	framework.define_key("d-up", "stop right", on_key_up, (void*)'d');
 
+	framework.define_key("space", "drift", on_key_down, (void*)' ');
+	framework.define_key("space-up", "stop drift", on_key_up, (void*)' '); 
+
 	// Add update task
 	framework.get_task_mgr().add(new GenericAsyncTask("UpdateTask", &update_task, nullptr));
 
 	
 	framework.main_loop();
 
-	conn_mgr->close_connection(connection);
-	delete conn_writer;
-	delete conn_mgr;
+	//conn_mgr->close_connection(connection);
+	//delete conn_writer;
+	//delete conn_mgr;
 	framework.close_framework();
 	return EXIT_SUCCESS;
 }
