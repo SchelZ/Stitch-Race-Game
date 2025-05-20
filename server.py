@@ -2,7 +2,12 @@ from panda3d.core import QueuedConnectionManager, loadPrcFileData, QueuedConnect
 from direct.task import Task
 from direct.showbase.ShowBase import ShowBase
 
-loadPrcFileData("", "window-type none")
+loadPrcFileData("", """
+window-type none
+audio-library-name null
+framebuffer-hardware false
+sync-video false
+""")
 
 class PandaServer(ShowBase):
     def __init__(self, port: int = 5000, backlog: int = 1000):
@@ -24,7 +29,7 @@ class PandaServer(ShowBase):
         print(f"[Server] Listening on port {port}...")
 
     def check_disconnections(self, task):
-        while self.manager.resetConnectionAvailable():
+        if self.manager.resetConnectionAvailable():
             ptr = PointerToConnection()
             if self.manager.getResetConnection(ptr):
                 connection = ptr.p()
@@ -46,7 +51,7 @@ class PandaServer(ShowBase):
 
 
     def onReceiveData(self, taskdata):
-        while self.reader.dataAvailable():
+        if self.reader.dataAvailable():
             datagram = NetDatagram()
             if self.reader.getData(datagram):
                 self.processData(datagram)
