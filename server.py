@@ -1,7 +1,6 @@
 from panda3d.core import QueuedConnectionManager, loadPrcFileData, QueuedConnectionReader, ConnectionWriter, NetAddress, Datagram, NetDatagram, DatagramIterator, QueuedConnectionListener, PointerToConnection
 from direct.task import Task
 from direct.showbase.ShowBase import ShowBase
-import threading, time
 
 loadPrcFileData("", "window-type none")
 
