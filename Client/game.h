@@ -11,6 +11,7 @@
 #include "genericAsyncTask.h"
 #include "keyboardButton.h"
 
+#include "network.h"
 #include "config.h"
 
 class Menu {
@@ -38,6 +39,9 @@ private:
 	PandaFramework   _framework;
 	WindowFramework* _window = nullptr;
 	Camera*			 _cam = nullptr;
+	std::unique_ptr<NetworkClient> _networkClient;
+	std::unique_ptr<Player> _localPlayer;				// make local player
+
 
 	struct LoadModelTaskData {
 		Game*				self;
@@ -74,20 +78,55 @@ private:
 		setCursorHidden(_window, CURSOR_STAT::hidden);
 
 		_framework.get_task_mgr().add(new GenericAsyncTask("LoadScene", &Game::loadModelWrapper, new LoadModelTaskData{ this, _window->get_render(), "models/environment", LVecBase3(-8, 42, 0), 0.25f }));
+		_framework.get_task_mgr().add(new GenericAsyncTask("LoadLocalPlayer", &Game::loadModelWrapper, new LoadModelTaskData{ this, _window->get_render(), "models/panda", LVecBase3(0, 0, 0), 0.25f }));
+		_networkClient = std::make_unique<NetworkClient>("127.0.0.1", 5000);
+
 		return true;
 	}
 
+	void onConnection() {
+		if (!_localPlayer || !_networkClient) return;
 
-	// Generic load model
+		NodePath& np = _localPlayer->get_car_mesh();
+
+		LVector3 pos = np.get_pos();
+		LVecBase3 hpr = np.get_hpr();
+		LVector3 scale = np.get_scale();
+
+		Datagram dg;
+		dg.add_string(_localPlayer->get_name());
+		dg.add_int32(static_cast<int>(_localPlayer->get_color_id()));
+
+		dg.add_float32(pos.get_x());
+		dg.add_float32(pos.get_y());
+		dg.add_float32(pos.get_z());
+
+		dg.add_float32(hpr.get_x());  // h = yaw
+		dg.add_float32(hpr.get_y());  // p = pitch
+		dg.add_float32(hpr.get_z());  // r = roll
+
+		dg.add_float32(scale.get_x());
+		dg.add_float32(scale.get_y());
+		dg.add_float32(scale.get_z());
+
+		_networkClient->onConnection(dg);
+	}
+
+
+	// Generic model loader
 	static AsyncTask::DoneStatus loadModelWrapper(GenericAsyncTask* task, void* data) {
-		LoadModelTaskData* p = static_cast<LoadModelTaskData*>(data);
+		std::unique_ptr<LoadModelTaskData> p(static_cast<LoadModelTaskData*>(data));
 		NodePath node = p->self->_window->load_model(p->self->_framework.get_models(), p->modelPath);
 		if (!node.is_empty()) {
 			node.reparent_to(p->parent);
 			node.set_scale(p->scale);
 			node.set_pos(p->pos);
 		} else { nout << "Failed to load model: " << p->modelPath << "\n"; }
-		delete p;
+
+		if (strcmp((p->modelPath).c_str(), "models/panda") == 0) {
+			p->self->_localPlayer = std::make_unique<Player>("LocalPlayer", 0, p_color::BLUE, node);
+			p->self->onConnection();
+		}
 		return AsyncTask::DS_done;
 	}
 };
